@@ -1,0 +1,309 @@
+<!DOCTYPE html>
+<html>
+	<head>
+		<title>Covid</title>
+		<meta charset="utf-8" />
+	</head>
+	<body>
+		<div class="main" style="height:95vh; width:95vw">
+			<h4>Cases in France</h4>
+			<canvas id="myChart"></canvas>
+		</div>
+		<div class="deaths" style="height:95vh; width:95vw; margin-top: 10vh">
+			<h4>Deaths in France</h4>
+			<canvas id="myChart-deaths"></canvas>
+		</div>
+		<div class="reg" style="height:95vh; width:95vw; margin-top: 10vh">
+			<h4>Cases by regions (France)</h4>
+			<canvas id="myChart2"></canvas>
+		</div>
+		<script src="https://unpkg.com/axios/dist/axios.min.js"></script>
+		<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/2.9.3/Chart.bundle.min.js" integrity="sha256-TQq84xX6vkwR0Qs1qH5ADkP+MvH0W+9E7TdHJsoIQiM=" crossorigin="anonymous"></script>
+		<script src="https://cdnjs.cloudflare.com/ajax/libs/regression/1.4.0/regression.min.js" integrity="sha256-shrQYVCltYlBHywosRi5na09S7Qru6QCOCV1c5EgJ6c=" crossorigin="anonymous"></script>
+		<script src="https://unpkg.com/papaparse@latest/papaparse.min.js"></script>
+		<script type="text/javascript">
+			const ctx = document.getElementById('myChart');
+
+			axios.get('https://services1.arcgis.com/5PzxEwuu4GtMhqQ6/arcgis/rest/services/progression_covid_vue/FeatureServer/0/query?f=json&where=1%3D1&returnGeometry=false&spatialRel=esriSpatialRelIntersects&outFields=*&orderByFields=date%20asc&resultOffset=0&resultRecordCount=2000&cacheHint=true')
+				.then((response) => {
+					const data = response.data.features || []
+
+					const dates = data.map((d) => {
+						return new Date(d.attributes.date)
+					})
+					const cases = data.map((d) => {
+						return d.attributes.nb_cas
+					})
+					const newCases = data.map((d) => {
+						return d.attributes.Nouveaux_cas
+					})
+
+					/* GROWTH FACTOR & RATIOS */
+					
+					let growthFactors = []
+					let ratios = [];
+
+					for (let i=1; i<newCases.length; i++) {
+						growthFactors.push(newCases[i-1] === 0 ? 0 : Number(newCases[i] / newCases[i-1]).toFixed(2))
+						ratios.push(Number(cases[i] / cases[i-1]).toFixed(2))
+					}
+
+					let predict = [];
+					for (let i=0; i<10; i++) {
+						let last = i === 0 ? cases[cases.length - 1] : predict[i-1]
+						let lastDate = dates[dates.length - 1]
+						let newDate = new Date(lastDate);
+
+						predict.push(Number(ratios[ratios.length-1] * last).toFixed(2))
+						newDate.setDate(newDate.getDate() + 1)
+
+						dates.push(newDate)
+					}
+
+					/* LINEAR REGRESSION */
+
+					let tuples = data.map((d, index) => {
+						return [index, d.attributes.nb_cas]
+					}).filter((d) => { return d[1] >= 3000 })
+					let linearRegression = regression('linear', tuples)
+					let linearRegressionData = linearRegression.points.map((d) => {
+						return d[1]
+					})
+					let fillLinearRegressionData = new Array(cases.length - linearRegressionData.length)
+					
+					const chart = new Chart(ctx, {
+						type: 'line',
+						data: {
+							labels: dates,
+							datasets: [
+								{
+									label: '# of cases',
+									data: cases,
+									fill: false,
+									borderColor: '#81d4fa',
+									pointBackgroundColor: '#81d4fa',
+									pointBorderColor: '#81d4fa'
+								},
+								{
+									label: '# of new cases',
+									type: 'bar',
+									data: newCases,
+									fill: true,
+									backgroundColor: '#e57373',
+								},
+								/*
+								{
+									label: 'linear regression',
+									data: [ ...fillLinearRegressionData, ...linearRegressionData ],
+									fill: false,
+									borderDash: [ 4, 10 ],
+									borderColor: '#ffc107',
+									pointBackgroundColor: '#ffc107',
+									pointBorderColor: '#ffc107',
+									pointStyle: 'line'
+								},
+								*/
+								{
+									label: 'linear previsions',
+									data: [ ... new Array(cases.length), ...predict ],
+									fill: false,
+									borderDash: [ 4, 10 ],
+									borderColor: '#ffc107',
+									pointBackgroundColor: '#ffc107',
+									pointBorderColor: '#ffc107',
+									pointStyle: 'line'
+								},
+							]
+						},
+						options: {
+							scales: {
+								xAxes: [{
+									type: 'time',
+									time: {
+										displayFormats: {
+											quarter: 'MMM YYYY'
+										}
+									}
+								}]
+							},
+							tooltips: {
+								callbacks: {
+									/*
+									label: (tooltipItem, data) => {
+										var label = data.datasets[tooltipItem.datasetIndex].label || '';
+
+										if (label) {
+											label += ': ';
+										}
+
+										label += tooltipItem.value;
+
+										if (tooltipItem.datasetIndex === 0 && tooltipItem.index !== 0) {
+											label = [ label, `Growth factor: ${growthFactors[tooltipItem.index - 1]}` ]
+										}
+
+										return label;
+									},
+									*/
+									footer: (tooltipItems, data) => {
+										if (tooltipItems[0].datasetIndex === 0 && tooltipItems[0].index !== 0) {
+											return `Growth factor: ${growthFactors[tooltipItems[0].index - 1]}`
+										}
+
+										return ''
+									}
+								}
+							}
+						}
+					})
+				})
+		</script>
+		<script type="text/javascript">
+			const ctxDeaths = document.getElementById('myChart-deaths');
+
+			let deaths = []
+			let newDeaths = []
+			let headers = []
+			let dates = []
+
+			let growthFactors = []
+			let ratios = [];
+			let predict = [];
+
+			Papa.parse('https://cors-anywhere.herokuapp.com/https://raw.githubusercontent.com/CSSEGISandData/COVID-19/master/csse_covid_19_data/csse_covid_19_time_series/time_series_covid19_deaths_global.csv', {
+				download: true,
+				step(row) {
+					if (headers.length === 0) { headers = row.data }
+					else if (row.data[1] === 'France' && row.data[0].trim().length === 0) { parseData(row.data) }
+				},
+				complete() { buildChart() }
+			})
+
+			function parseData(data) {
+				for (let i=4; i<data.length; i++) {
+					dates.push(new Date(headers[i]))
+					deaths.push(data[i])
+
+					if (i === 4) { newDeaths.push(0) }
+					else { newDeaths.push(data[i] - data[i-1]) }
+				}
+
+				/* GROWTH FACTOR & RATIOS */
+
+				for (let i=1; i<newDeaths.length; i++) {
+					growthFactors.push(newDeaths[i-1] === 0 ? 0 : Number(newDeaths[i] / newDeaths[i-1]).toFixed(2))
+					ratios.push(Number(deaths[i] / deaths[i-1]).toFixed(2))
+				}
+
+				for (let i=0; i<10; i++) {
+					let last = i === 0 ? deaths[deaths.length - 1] : predict[i-1]
+					let lastDate = dates[dates.length - 1]
+					let newDate = new Date(lastDate);
+
+					predict.push(Number(ratios[ratios.length-1] * last).toFixed(2))
+					newDate.setDate(newDate.getDate() + 1)
+
+					dates.push(newDate)
+				}
+			}
+
+			function buildChart() {
+				const chart = new Chart(ctxDeaths, {
+					type: 'line',
+					data: {
+						labels: dates,
+						datasets: [
+							{
+								label: '# of deaths',
+								data: deaths,
+								fill: false,
+								borderColor: '#81d4fa',
+								pointBackgroundColor: '#81d4fa',
+								pointBorderColor: '#81d4fa'
+							},
+							{
+								label: '# of new deaths',
+								type: 'bar',
+								data: newDeaths,
+								fill: true,
+								backgroundColor: '#e57373',
+							},
+							{
+								label: 'linear previsions',
+								data: [ ... new Array(deaths.length), ...predict ],
+								fill: false,
+								borderDash: [ 4, 10 ],
+								borderColor: '#ffc107',
+								pointBackgroundColor: '#ffc107',
+								pointBorderColor: '#ffc107',
+								pointStyle: 'line'
+							},
+						]
+					},
+					options: {
+						scales: {
+							xAxes: [{
+								type: 'time',
+								time: {
+									displayFormats: {
+										quarter: 'MMM YYYY'
+									}
+								}
+							}]
+						},
+						tooltips: {
+							callbacks: {
+								footer: (tooltipItems, data) => {
+									if (tooltipItems[0].datasetIndex === 0 && tooltipItems[0].index !== 0) {
+										return `Growth factor: ${growthFactors[tooltipItems[0].index - 1]}`
+									}
+
+									return ''
+								}
+							}
+						}
+					}
+				})
+			}
+		</script>
+		<script type="text/javascript">
+			const ctx2 = document.getElementById('myChart2');
+
+			axios.get('https://services1.arcgis.com/5PzxEwuu4GtMhqQ6/arcgis/rest/services/Regions_DT_Project_Vue/FeatureServer/0/query?f=json&where=nb_cas%20%3E%200&returnGeometry=false&spatialRel=esriSpatialRelIntersects&outFields=*&orderByFields=nb_cas%20desc&outSR=102100&resultOffset=0&resultRecordCount=2000&cacheHint=true')
+				.then((response) => {
+					const data = response.data.features || []
+
+					const names = data.map((d) => {
+						return d.attributes.nom
+					})
+					const cases = data.map((d) => {
+						return d.attributes.nb_cas
+					})
+					const population = data.map((d) => {
+						return d.attributes.population
+					})
+					
+					/* RATIOS */
+
+					let ratios = []
+					for (let i=0; i<cases.length; i++) {
+						ratios.push(cases[i] / population[i])
+					}
+					
+					const chart = new Chart(ctx2, {
+						type: 'doughnut',
+						data: {
+							labels: names,
+							datasets: [
+								{
+									label: '# of cases',
+									data: cases,
+									backgroundColor: [ '#b71c1c', '#c62828', '#bf360c', '#e65100', '#ff6f00', '#f57f17', '#ff7043', '#ffa726', '#ffca28', '#ffee58', '#d4e157', '#9ccc65', '#66bb6a', '#4caf50', '#43a047', '#388e3c', '#2e7d32', '#1b5e20', '#00695c', '#004d40' ]
+								}
+							]
+						}
+					})
+				})
+		</script>
+	</body>
+</html>
